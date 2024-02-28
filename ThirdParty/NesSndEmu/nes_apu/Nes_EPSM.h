@@ -32,6 +32,7 @@ public:
 	unsigned char regs_a1[184];
 	unsigned char ages_a1[184];
 
+	enum { psg_clock = 2000000 };	// PSG clock is de facto prescaled by 4
 	enum { epsm_clock = 8000000 };
 	enum { ntsc_clock = 1789773 };
 	enum { pal_clock = 1662607 };

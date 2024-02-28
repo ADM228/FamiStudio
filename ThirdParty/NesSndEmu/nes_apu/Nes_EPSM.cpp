@@ -44,7 +44,7 @@ void Nes_EPSM::volume(double v)
 
 void Nes_EPSM::reset_psg()
 {
-	psg.Reset((uint32_t)((pal_mode ? pal_clock : ntsc_clock) / 16), epsm_clock);
+	psg.Reset((uint32_t)((pal_mode ? pal_clock : ntsc_clock) / 16), psg_clock);
 }
 
 void Nes_EPSM::reset_opn2()
