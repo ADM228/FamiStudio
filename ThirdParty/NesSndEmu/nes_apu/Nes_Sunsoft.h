@@ -5,6 +5,7 @@
 #define NES_SUNSOFT_H
 
 #include "Nes_Apu.h"
+#include "ym2149c.h"
 
 class Nes_Sunsoft {
 public:
@@ -43,15 +44,15 @@ private:
 	
 	void reset_psg();
 
-	int reg;
+	int reg;		// only used in shadow regs
 	BOOST::uint8_t ages[16];
 	double vol;
-	struct __PSG* psg;
+	Ym2149c psg;
 	Blip_Buffer* output_buffer;
 	cpu_time_t last_time;
 	int delay;
 	int last_amp;
-	Blip_Synth<blip_med_quality, 15420> synth;
+	Blip_Synth<blip_med_quality, 32768> synth;
 	int triggers[3];
 
 	short shadow_internal_regs[shadow_internal_regs_count];

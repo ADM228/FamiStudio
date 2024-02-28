@@ -2,11 +2,11 @@
 // Added to Nes_Snd_Emu by @NesBleuBleu.
 
 #include "Nes_Sunsoft.h"
-#include "emu2149.h"
+#include "ym2149c.h"
 
 #include BLARGG_SOURCE_BEGIN
 
-Nes_Sunsoft::Nes_Sunsoft() : psg(NULL), output_buffer(NULL)
+Nes_Sunsoft::Nes_Sunsoft() : psg(), output_buffer(NULL)
 {
 	output(NULL);
 	volume(1.0);
@@ -15,8 +15,7 @@ Nes_Sunsoft::Nes_Sunsoft() : psg(NULL), output_buffer(NULL)
 
 Nes_Sunsoft::~Nes_Sunsoft()
 {
-	if (psg)
-		PSG_delete(psg);
+
 }
 
 void Nes_Sunsoft::reset()
@@ -35,18 +34,14 @@ void Nes_Sunsoft::volume(double v)
 
 void Nes_Sunsoft::reset_psg()
 {
-	if (psg)
-		PSG_delete(psg);
-
-	psg = PSG_new(psg_clock, psg_clock / 16);
-	PSG_reset(psg);
+	psg.Reset(psg_clock/16, psg_clock / 2);
 }
 
 void Nes_Sunsoft::output(Blip_Buffer* buf)
 {
 	output_buffer = buf;
 
-	if (output_buffer && (!psg || output_buffer->sample_rate() != psg->rate))
+	if (output_buffer && (output_buffer->sample_rate() != psg.m_hostReplayRate))
 		reset_psg();
 }
 
@@ -57,13 +52,10 @@ void Nes_Sunsoft::treble_eq(blip_eq_t const& eq)
 
 void Nes_Sunsoft::enable_channel(int idx, bool enabled)
 {
-	if (psg)
-	{
-		if (enabled)
-			PSG_setMask(psg, psg->mask & ~(1 << idx));
-		else
-			PSG_setMask(psg, psg->mask | (1 << idx));
-	}
+	if (enabled)
+		psg.SetMask(psg.m_channelMask |  (1 << idx));
+	else
+		psg.SetMask(psg.m_channelMask & ~(1 << idx));
 }
 
 void Nes_Sunsoft::write_register(cpu_time_t time, cpu_addr_t addr, int data)
@@ -74,7 +66,7 @@ void Nes_Sunsoft::write_register(cpu_time_t time, cpu_addr_t addr, int data)
 	}
 	else if (addr >= reg_write && addr < (reg_write + reg_range))
 	{
-		PSG_writeReg(psg, reg, data);
+		psg.WriteReg(reg, data);
 		ages[reg] = 0;
 	}
 	run_until(time);
@@ -92,8 +84,8 @@ long Nes_Sunsoft::run_until(cpu_time_t time)
 
 	while (t < time)
 	{
-		int sample = PSG_calc(psg);
-		sample = clamp(sample, -7710, 7710);
+		int sample = psg.ComputeNextSample();
+		sample = clamp(sample, -16384, 16384);
 
 		int delta = sample - last_amp;
 		if (delta)
@@ -104,9 +96,9 @@ long Nes_Sunsoft::run_until(cpu_time_t time)
 
 		for (int i = 0; i < 3; i++)
 		{
-			if (psg->trigger_mask & (1 << i))
+			if (psg.m_triggerMask & (1 << i))
 				update_trigger(output_buffer, t, triggers[i]);
-			else if (psg->freq[i] <= 1)
+			else if (psg.m_tonePeriod[i] <= 1)
 				triggers[i] = trigger_none;
 		}
 
@@ -155,9 +147,10 @@ void Nes_Sunsoft::write_shadow_register(int addr, int data)
 
 void Nes_Sunsoft::get_register_values(struct sunsoft5b_register_values* regs)
 {
-	for (int i = 0; i < array_count(regs->regs); i++)
+	regs->regs[14] = 0; regs->regs[15] = 0;
+	for (int i = 0; i < array_count(psg.m_regs); i++)
 	{
-		regs->regs[i] = psg->reg[i];
+		regs->regs[i] = psg.m_regs[i];
 		regs->ages[i] = ages[i];
 
 		ages[i] = increment_saturate(ages[i]);
