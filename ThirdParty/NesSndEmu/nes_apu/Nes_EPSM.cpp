@@ -2,11 +2,11 @@
 // Added to Nes_Snd_Emu by @NesBleuBleu.
 
 #include "Nes_EPSM.h"
-#include "emu2149.h"
+#include "ym2149c.h"
 #include "ym3438.h"
 #include BLARGG_SOURCE_BEGIN
 
-Nes_EPSM::Nes_EPSM() : psg(NULL), output_buffer_left(NULL), output_buffer_right(NULL)
+Nes_EPSM::Nes_EPSM() : psg(), output_buffer_left(NULL), output_buffer_right(NULL)
 {
 	output(NULL,NULL);
 	volume(1.0);
@@ -15,8 +15,8 @@ Nes_EPSM::Nes_EPSM() : psg(NULL), output_buffer_left(NULL), output_buffer_right(
 
 Nes_EPSM::~Nes_EPSM()
 {
-	if (psg)
-		PSG_delete(psg);
+	// if (psg)
+		// PSG_delete(psg);
 	//if (opn2)
 		// destruct or handle opn2 somehow
 }
@@ -44,11 +44,7 @@ void Nes_EPSM::volume(double v)
 
 void Nes_EPSM::reset_psg()
 {
-	if (psg)
-		PSG_delete(psg);
-
-	psg = PSG_new(psg_clock, (uint32_t)((pal_mode ? pal_clock : ntsc_clock) / 16));
-	PSG_reset(psg);
+	psg.Reset((uint32_t)((pal_mode ? pal_clock : ntsc_clock) / 16), epsm_clock);
 }
 
 void Nes_EPSM::reset_opn2()
@@ -62,7 +58,7 @@ void Nes_EPSM::output(Blip_Buffer* buf, Blip_Buffer* buf_right)
 	output_buffer_left = buf;
 	output_buffer_right = buf_right;
 
-	if (output_buffer_left && (!psg || output_buffer_left->sample_rate() != psg->rate))
+	if (output_buffer_left && (output_buffer_left->sample_rate() != psg.m_hostReplayRate))
 		reset_psg();
 }
 
@@ -76,13 +72,10 @@ void Nes_EPSM::enable_channel(int idx, bool enabled)
 {
 	if (idx < 3)
 	{
-		if (psg)
-		{
-			if (enabled)
-				PSG_setMask(psg, psg->mask & ~(1 << idx));
-			else
-				PSG_setMask(psg, psg->mask | (1 << idx));
-		}
+		if (enabled)
+			psg.SetMask(psg.m_channelMask |  (1 << idx));
+		else
+			psg.SetMask(psg.m_channelMask & ~(1 << idx));
 	}
 
 	if (idx < 9 && idx > 2)
@@ -135,7 +128,7 @@ void Nes_EPSM::write_register(cpu_time_t time, cpu_addr_t addr, int data)
 		case reg_write:
 			if (reg < 0x10)
 			{
-				PSG_writeReg(psg, reg, data);
+				psg.WriteReg(reg, data);
 				psg_reg = true;
 			}
 			regs_a0[current_register] = data;
@@ -172,7 +165,7 @@ long Nes_EPSM::run_until(cpu_time_t end_time)
 
 	while (psg_time < end_time)
 	{
-		int sample = (int)PSG_calc(psg) * 10 / 18;
+		int sample = (int)(psg.ComputeNextSample() / 4.25 * 10 / 18);
 		int delta = sample - last_psg_amp;
 
 		if (delta)
@@ -185,9 +178,9 @@ long Nes_EPSM::run_until(cpu_time_t end_time)
 
 		for (int i = 0; i < 3; i++)
 		{
-			if (psg->trigger_mask & (1 << i))
+			if (psg.m_triggerMask & (1 << i))
 				update_trigger(output_buffer_left, psg_time >> epsm_time_precision, triggers[i]);
-			else if (psg->freq[i] <= 1)
+			else if (psg.m_tonePeriod[i] <= 1)
 				triggers[i] = trigger_none;
 		}
 

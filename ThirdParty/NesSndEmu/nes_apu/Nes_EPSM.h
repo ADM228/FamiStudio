@@ -5,6 +5,7 @@
 #define NES_EPSM_H
 
 #include "Nes_Apu.h"
+#include "ym2149c.h"
 #include "ym3438.h"
 
 class Nes_EPSM {
@@ -31,7 +32,6 @@ public:
 	unsigned char regs_a1[184];
 	unsigned char ages_a1[184];
 
-	enum { psg_clock = 4000000 };
 	enum { epsm_clock = 8000000 };
 	enum { ntsc_clock = 1789773 };
 	enum { pal_clock = 1662607 };
@@ -66,7 +66,7 @@ private:
 	BOOST::uint8_t mask_fm;
 	BOOST::uint8_t mask_rhythm;
 	double vol;
-	struct __PSG* psg;
+	Ym2149c psg;
 	ym3438_t opn2;
 
 	Blip_Buffer* output_buffer_left;

@@ -23,7 +23,8 @@ public:
 	void	SetMask(uint8_t mask);
 
 private:
-	friend class Nes_Sunsoft;	// Now i can poke inside
+	friend class Nes_Sunsoft;
+	friend class Nes_EPSM;	// Now i can poke inside
 
 	void	WriteReg(int reg, uint8_t value);
 	uint16_t Tick();
