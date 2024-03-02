@@ -43,6 +43,8 @@ public:
 	enum { reg_range = 0x1 };
 	enum { reg_addr_cycle_skip = 4 };
 	enum { reg_data_cycle_skip = 20 };
+	enum { trig_width = 122312 };	// psg_clock * (1 / min_freq),
+									// min_freq being C0 = 16.3516Hz
 
 	enum { shadow_internal_regs_count = 220 };
 	void start_seeking();

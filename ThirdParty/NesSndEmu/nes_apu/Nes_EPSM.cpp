@@ -51,6 +51,7 @@ void Nes_EPSM::reset_psg()
 		psg = PSG_new(psg_clock, (uint32_t)((pal_mode ? pal_clock : ntsc_clock) / 16));
 	}
 	PSG_setClockDivider(psg, false);	// ¼ prescaler already built into psg_clock
+	PSG_setTriggering(psg, trig_width, EMU2149_TRIG_FMT_TICKS);
 	PSG_reset(psg);
 }
 
@@ -190,7 +191,7 @@ long Nes_EPSM::run_until(cpu_time_t end_time)
 		{
 			if (psg->trigger_mask & (1 << i))
 				update_trigger(output_buffer_left, psg_time >> epsm_time_precision, triggers[i]);
-			else if (psg->freq[i] <= 1)
+			else if (psg->freq[i] <= 1 || !(psg->trigger_mask & (1 << i)))
 				triggers[i] = trigger_none;
 		}
 

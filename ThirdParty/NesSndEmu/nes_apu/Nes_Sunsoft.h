@@ -27,6 +27,8 @@ public:
 	enum { reg_select = 0xc000  };
 	enum { reg_write  = 0xe000 };
 	enum { reg_range  = 0x2000 };
+	enum { trig_width  = 54728 };	// psg_clock / 2 * (1 / min_freq),
+									// min_freq being C0 = 16.3516Hz
 
 	enum { shadow_internal_regs_count = 16 };
 	void start_seeking();

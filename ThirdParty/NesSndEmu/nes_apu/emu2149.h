@@ -44,6 +44,7 @@ extern "C"
     uint8_t env_pause;
 
     uint16_t env_freq;
+    uint32_t env_whole_period;
     uint32_t env_count;
 
     uint32_t noise_seed;
@@ -61,8 +62,11 @@ extern "C"
     /* I/O Ctrl */
     uint8_t adr;
 
-    /* FamiStudio : tells us which channels have had a rising edge this step. */
-    uint8_t trigger_mask; 
+    /* FamiStudio : triggering related */
+    uint8_t trigger_mask;   // Tells us which channels have had an edge this step.
+    uint32_t trigger_width; // Width of the triggering window
+    uint8_t env_changed;    // Specifically for low freq envelope + tone/noise 
+    uint32_t time_since_last_trigger[3]; // For making a trigger in long absence of one
 
     /* output of channels */
     int16_t ch_out[3];
@@ -73,6 +77,7 @@ extern "C"
   void PSG_setClock(PSG *psg, uint32_t clk);
   void PSG_setClockDivider(PSG *psg, uint8_t enable);
   void PSG_setRate (PSG * psg, uint32_t rate);
+  void PSG_setTriggering(PSG *psg, uint32_t width, uint8_t format);
   PSG *PSG_new (uint32_t clk, uint32_t rate);
   void PSG_reset (PSG *);
   void PSG_delete (PSG *);
@@ -84,6 +89,24 @@ extern "C"
   void PSG_setVolumeMode (PSG * psg, int type);
   uint32_t PSG_setMask (PSG *, uint32_t mask);
   uint32_t PSG_toggleMask (PSG *, uint32_t mask);
+
+  enum PSG_triggeringFormat : uint8_t {
+    EMU2149_TRIG_FMT_TICKS = 0,
+    EMU2149_TRIG_FMT_MILLISECONDS,
+    EMU2149_TRIG_FMT_SECONDS,
+    EMU2149_TRIG_FMT_HZ
+  };
+
+  enum PSG_volumeTable : uint8_t {
+    EMU2149_VOL_YM2149 = 0,
+    EMU2149_VOL_AY_3_8910,
+
+    EMU2149_VOL_COUNT
+  };
+
+  #ifndef EMU2149_VOL_DEFAULT
+    #define EMU2149_VOL_DEFAULT EMU2149_VOL_YM2149
+  #endif
     
 #ifdef __cplusplus
 }

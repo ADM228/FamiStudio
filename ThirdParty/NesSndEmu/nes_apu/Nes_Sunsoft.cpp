@@ -30,7 +30,7 @@ void Nes_Sunsoft::reset()
 
 void Nes_Sunsoft::volume(double v)
 {
-	synth.volume(v);
+	synth.volume(v * 0.793774f);
 }
 
 void Nes_Sunsoft::reset_psg()
@@ -42,6 +42,7 @@ void Nes_Sunsoft::reset_psg()
 		psg = PSG_new(psg_clock, psg_clock / 16);
 	}
 	PSG_setClockDivider(psg, true);
+	PSG_setTriggering(psg, trig_width, EMU2149_TRIG_FMT_TICKS);
 	PSG_reset(psg);
 }
 
@@ -110,7 +111,7 @@ long Nes_Sunsoft::run_until(cpu_time_t time)
 		{
 			if (psg->trigger_mask & (1 << i))
 				update_trigger(output_buffer, t, triggers[i]);
-			else if (psg->freq[i] <= 1)
+			else if (psg->freq[i] <= 1 || !(psg->trigger_mask & (1 << i)))
 				triggers[i] = trigger_none;
 		}
 

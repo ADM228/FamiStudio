@@ -134,6 +134,19 @@ PSG_setQuality (PSG * psg, uint8_t q)
   }
 }
 
+
+void PSG_setTriggering(PSG *psg, uint32_t width, uint8_t format)
+{
+  if (format == EMU2149_TRIG_FMT_TICKS)
+    psg->trigger_width = width;
+  else if (format == EMU2149_TRIG_FMT_MILLISECONDS)
+    psg->trigger_width = (uint32_t)(((float)psg->clk / (psg->clk_div + 1)) * width / 1000);
+  else if (format == EMU2149_TRIG_FMT_SECONDS)
+    psg->trigger_width = ((float)psg->clk / (psg->clk_div + 1)) * width;
+  else if (format == EMU2149_TRIG_FMT_HZ)
+    psg->trigger_width = ((float)psg->clk / (psg->clk_div + 1)) * (1.0 / width);
+}
+
 PSG *
 PSG_new (uint32_t clock, uint32_t rate)
 {
@@ -148,6 +161,8 @@ PSG_new (uint32_t clock, uint32_t rate)
   psg->clk_div = 0;
   psg->rate = rate ? rate : 44100;
   psg->quality = 0;
+  psg->trigger_width = 0;  
+  memset(psg->time_since_last_trigger, 0, sizeof(uint32_t)*3);
   internal_refresh(psg);
   PSG_setMask(psg, 0x00);
   return psg;
@@ -156,18 +171,10 @@ PSG_new (uint32_t clock, uint32_t rate)
 void
 PSG_setVolumeMode (PSG * psg, int type)
 {
-  switch (type)
-  {
-  case 1:
-    psg->voltbl = voltbl[0]; /* YM2149 */
-    break;
-  case 2:
-    psg->voltbl = voltbl[1]; /* AY-3-8910 */
-    break;
-  default:
-    psg->voltbl = voltbl[0]; /* fallback: YM2149 */
-    break;
-  }
+  if (type >= EMU2149_VOL_COUNT)
+    psg->voltbl = voltbl[EMU2149_VOL_DEFAULT]; /* fallback: YM2149 */
+  else
+    psg->voltbl = voltbl[type]; /* YM2149 */
 }
 
 uint32_t
@@ -264,6 +271,7 @@ update_output (PSG * psg)
 
   int i, noise;
   uint8_t incr;
+  uint8_t toneTrig, noiseTrig = 0;
 
   psg->base_count += psg->base_incr;
   incr = (psg->base_count >> GETA_BITS);
@@ -278,16 +286,19 @@ update_output (PSG * psg)
     if (!psg->env_pause)
     {
       if(psg->env_face)
-        psg->env_ptr = (psg->env_ptr + 1) & 0x3f ; 
+        psg->env_ptr = (psg->env_ptr + 1) & 0x3f; 
       else
         psg->env_ptr = (psg->env_ptr + 0x3f) & 0x3f;
+
+      if (psg->env_whole_period >= psg->trigger_width) 
+        psg->env_changed = 1; // Trigger envelope at any point it changes volume
     }
 
-    if (psg->env_ptr & 0x20) /* if carry or borrow */
+    if (psg->env_ptr & 0x20) /* if carry or borrow - new envelope repetition period */
     {
       if (psg->env_continue)
       {
-        if (psg->env_alternate^psg->env_hold) psg->env_face ^= 1;
+        if (psg->env_alternate^psg->env_hold) psg->env_face ^= 1; // Swap face on triangle envelopes
         if (psg->env_hold) psg->env_pause = 1;
         psg->env_ptr = psg->env_face ? 0 : 0x1f;       
       }
@@ -296,6 +307,9 @@ update_output (PSG * psg)
         psg->env_pause = 1;
         psg->env_ptr = 0;
       }
+
+      if (psg->env_whole_period < psg->trigger_width && (!psg->env_ptr || !psg->env_alternate))
+        psg->env_changed = 1; // Trigger envelope on edges with 0 (bottom of tri, edge of saw)
     }
 
     if (psg->env_freq >= incr) 
@@ -314,6 +328,9 @@ update_output (PSG * psg)
       if ((psg->noise_seed ^ (psg->noise_seed >> 3)) & 1)
         psg->noise_seed |= 1<<17;
       psg->noise_seed >>= 1;
+
+      if (!(psg->noise_seed & 1))
+        noiseTrig = 1; // Trigger noise on rising edges
     }
 
     if (psg->noise_freq >= incr)
@@ -326,6 +343,7 @@ update_output (PSG * psg)
   /* Tone */
   for (i = 0; i < 3; i++)
   {
+    toneTrig = 0;
     psg->count[i] += incr;
     if (psg->count[i] >= psg->freq[i])
     {
@@ -334,11 +352,9 @@ update_output (PSG * psg)
       if (psg->freq[i] >= incr) 
         psg->count[i] -= psg->freq[i];
       else
-      {
         psg->count[i] = 0;
-      }
       if (psg->edge[i])
-        psg->trigger_mask |= (1 << i);
+        toneTrig = 1; // Trigger tone on rising waves
     }
 
     if (0 < psg->freq_limit && psg->freq[i] <= psg->freq_limit) {
@@ -367,7 +383,75 @@ update_output (PSG * psg)
     {
       psg->ch_out[i] = 0;
     }
+
+    if (psg->trigger_width) {
+      // Complex triggering
+      switch (
+        ((psg->tmask[i] >> i) ^ 1) | 
+        ((psg->nmask[i] >> (i + 2)) ^ 2) | 
+        ((psg->volume[i] & 0x20) >> 3) | 
+        (((psg->volume[i] & 0x20) &&
+          psg->env_pause) ? 1<<4 : 0)) { // Choose scenario based on elements
+        case 0b0001: // Tone only
+        case 0b1101: // Paused envelope + tone
+        case 0b0011: // Tone + noise
+        case 0b1111: // Paused envelope + tone + noise
+          if (toneTrig)
+            psg->trigger_mask |= 1<<i;  // Trigger on rising tone edges
+          break;
+        case 0b0010: // Noise only
+        case 0b1110: // Paused envelope + noise
+          if (noiseTrig)
+            psg->trigger_mask |= 1<<i;  // Trigger on rising noise edges
+          break;
+        case 0b0100: // Unpaused envelope
+          if (psg->env_changed || psg->time_since_last_trigger[i] >= psg->trigger_width)
+            psg->trigger_mask |= 1<<i;
+          break;
+        case 0b0101: // Unpaused envelope + tone
+          if (
+            (psg->env_whole_period >= psg->trigger_width && (psg->env_changed || psg->time_since_last_trigger[i] >= psg->trigger_width) && toneTrig) ||  // If new tone volume or too damn long (long env)
+            (psg->env_whole_period <  psg->trigger_width && psg->env_changed))   // or just edge (audible env)
+          {   
+            psg->trigger_mask |= 1<<i;
+            psg->env_changed = 0;
+          }
+          break;
+        case 0b0110: // Unpaused envelope + noise
+          if (
+            (psg->env_whole_period >= psg->trigger_width && (psg->env_changed || psg->time_since_last_trigger[i] >= psg->trigger_width) && noiseTrig) ||  // If new noise volume or too damn long (long env)
+            (psg->env_whole_period <  psg->trigger_width && psg->env_changed))   // or just edge (audible env)
+          {   
+            psg->trigger_mask |= 1<<i;
+            psg->env_changed = 0;
+          }
+          break;
+        case 0b0111: // Unpaused envelope + tone + noise (the most hellish)
+          if (psg->env_whole_period >= psg->trigger_width && (psg->env_changed || psg->time_since_last_trigger[i] >= psg->trigger_width)) {  // If envelope is slow,
+            if ((toneTrig && psg->freq[i] * 8 < psg->trigger_width) ||   // and either a pulse edge with fast pulse
+                (noiseTrig && psg->freq[i] * 8 >= psg->trigger_width)) {  // or noise edge with slow pulse (which never happens)
+              psg->trigger_mask |= 1<<i;  // Trigger
+              psg->env_changed = 0;       // Acknowledge volume change
+            }
+          } else if (psg->env_whole_period < psg->trigger_width && psg->env_changed) {  // If envelope is audible, and an edge happened
+            psg->trigger_mask |= 1<<i;  // Trigger
+          }
+        default:
+          if (psg->time_since_last_trigger[i] >= psg->trigger_width)  // If it's just been too damn long
+            psg->trigger_mask |= 1<<i;  // Trigger
+          break;
+      }
+      if (psg->trigger_mask & 1<<i) {
+        psg->time_since_last_trigger[i] = 0;
+      } else {
+        psg->time_since_last_trigger[i]++;
+      }
+    }
   }
+  
+  /* Reset envelope trigger if audible */
+  if (psg->env_whole_period < psg->trigger_width)
+    psg->env_changed = 0;
 }
 
 static inline int16_t 
@@ -459,6 +543,8 @@ PSG_writeReg (PSG * psg, uint32_t reg, uint32_t val)
     psg->env_pause = 0;
     psg->env_count = 0;
     psg->env_ptr = psg->env_face ? 0 : 0x1f;
+    psg->env_whole_period = (psg->env_freq * ((psg->env_alternate&(!psg->env_hold)&psg->env_continue)+1)) << 8; 
+    psg->env_changed = 0;   // Trigger envelopes on their resets as well
     break;
 
   case 14:
