@@ -1,6 +1,7 @@
 /****************************************************************************
 
   emu2149.c -- YM2149/AY-3-8910 emulator by Mitsutaka Okazaki 2001-2022
+  emu2149.c -- YM2149/AY-3-8910 emulator by Mitsutaka Okazaki 2001-2022
 
   2001 04-28 : Version 1.00beta -- 1st Beta Release.
   2001 08-14 : Version 1.10
@@ -35,6 +36,31 @@
                         (now YM envelopes sound like intended)
                     --  Envelopes now *fully* reset on write to 0xD
                                 
+  2021 09-29 : Version 1.30     -- Fix some envelope generator problems (issue #2).
+  2022-11-25 : Version 1.40     -- Fix the bug with the changing period register
+                                   faster than frequency (issue #3).
+                                -- Fix the confusing PSG_setVolumeMode type argument.
+                                -- Rename PSG_set_rate to PSG_setRate.
+                                -- Rename PSG_set_quality to PSG_setQuality.
+                                -- Restore PSG_setClock that was removed on v1.20 for
+                                   compatibility.
+                                -- Add PSG_setClockDivider function.
+                                -- Fix noise period at zero frequency.
+  2022-11-26 : Version 1.41     -- Fix a problem with DC offset when muting a channel
+                                   (issue #4).
+                                -- Disable frequency limiter if the internal rate 
+                                   converter is not active (i.e. quality == 0).
+  
+  Further modifications done by alexmush:
+  
+  2024-02-29 :      --  Fixed the noise generator 
+                        (now accurate to real YM2149 and YM6630 hardware)
+                    --  Shifted volume table & adjusted regular volume assignment for it
+                        (now YM envelopes sound like intended)
+                    --  Envelopes now *fully* reset on write to 0xD
+
+  2024-03-01-02 :   --  Complex af triggering
+                                
 
   References:
     psg.vhd        -- 2000 written by Kazuhiro Tsujikawa.
@@ -42,6 +68,7 @@
     ay8910.c       -- 1998-2001 Author unknown (MAME).
     MSX-Datapack   -- 1991 ASCII Corp.
     AY-3-8910 data sheet
+    YM2149 data sheet
     YM2149 data sheet
     
 *****************************************************************************/
@@ -67,8 +94,25 @@ static uint32_t voltbl[2][32] = {
    0x12, 0x12, 0x1D, 0x1D,
    0x22, 0x22, 0x37, 0x37, 0x4D, 0x4D, 0x62, 0x62, 0x82, 0x82, 0xA6, 0xA6,
    0xD0, 0xD0, 0xFF, 0xFF}
+  /* 
+    YM2149 - 32 steps
+    source: emu2149 (shifted forwards by 1 by alexmush)
+  */
+  {0x00, 0x00, 0x01, 0x01, 0x02, 0x02, 0x03, 0x03, 0x04, 0x05, 0x06, 0x07,
+   0x09, 0x0B, 0x0D, 0x0F,
+   0x12, 0x16, 0x1A, 0x1F, 0x25, 0x2D, 0x35, 0x3F, 0x4C, 0x5A, 0x6A, 0x7F,
+   0x97, 0xB4, 0xD6, 0xFF},
+  /* 
+    AY-3-8910 - 16 steps
+    source: emu2149
+  */
+  {0x00, 0x00, 0x03, 0x03, 0x04, 0x04, 0x06, 0x06, 0x09, 0x09, 0x0D, 0x0D,
+   0x12, 0x12, 0x1D, 0x1D,
+   0x22, 0x22, 0x37, 0x37, 0x4D, 0x4D, 0x62, 0x62, 0x82, 0x82, 0xA6, 0xA6,
+   0xD0, 0xD0, 0xFF, 0xFF}
 };
 
+static const uint8_t regmsk[16] = {
 static const uint8_t regmsk[16] = {
     0xff, 0x0f, 0xff, 0x0f, 0xff, 0x0f, 0x1f, 0x3f, 
     0x1f, 0x1f, 0x1f, 0xff, 0xff, 0x0f, 0xff, 0xff
@@ -84,9 +128,16 @@ internal_refresh (PSG * psg)
   if (psg->clk_div)
     f_master /= 2;
 
+  uint32_t f_master = psg->clk;
+
+  if (psg->clk_div)
+    f_master /= 2;
+
   if (psg->quality)
   {
     psg->base_incr = 1 << GETA_BITS;
+    psg->realstep = f_master;
+    psg->psgstep = psg->rate * 8;
     psg->realstep = f_master;
     psg->psgstep = psg->rate * 8;
     psg->psgtime = 0;
@@ -104,18 +155,35 @@ PSG_setClock(PSG *psg, uint32_t clock)
   if (psg->clk != clock) {
     psg->clk = clock;
     internal_refresh(psg);
+    psg->base_incr = (uint32_t)((double)f_master * (1 << GETA_BITS) / 8 / psg->rate);
+    psg->freq_limit = 0;
   }
 }
 
+void 
+PSG_setClock(PSG *psg, uint32_t clock)
+{
+  if (psg->clk != clock) {
+    psg->clk = clock;
+    internal_refresh(psg);
+  }
+}
+
+void 
+PSG_setClockDivider(PSG *psg, uint8_t enable)
 void 
 PSG_setClockDivider(PSG *psg, uint8_t enable)
 {
   if (psg->clk_div != enable) {
     psg->clk_div = enable;  
     internal_refresh (psg);  }
+  if (psg->clk_div != enable) {
+    psg->clk_div = enable;  
+    internal_refresh (psg);  }
 }
 
 void
+PSG_setRate (PSG * psg, uint32_t rate)
 PSG_setRate (PSG * psg, uint32_t rate)
 {
   uint32_t r = rate ? rate : 44100;
@@ -149,9 +217,11 @@ void PSG_setTriggering(PSG *psg, uint32_t width, uint8_t format)
 
 PSG *
 PSG_new (uint32_t clock, uint32_t rate)
+PSG_new (uint32_t clock, uint32_t rate)
 {
   PSG *psg;
 
+  psg = (PSG *) calloc (1, sizeof (PSG));
   psg = (PSG *) calloc (1, sizeof (PSG));
   if (psg == NULL)
     return NULL;
@@ -211,6 +281,7 @@ PSG_reset (PSG * psg)
   for (i = 0; i < 3; i++)
   {
     psg->count[i] = 0;
+    psg->count[i] = 0;
     psg->freq[i] = 0;
     psg->edge[i] = 0;
     psg->volume[i] = 0;
@@ -223,6 +294,9 @@ PSG_reset (PSG * psg)
     psg->reg[i] = 0;
   psg->adr = 0;
 
+  psg->noise_scaler = 0;
+  psg->noise_seed = 1;
+  psg->noise_count = 0;
   psg->noise_scaler = 0;
   psg->noise_seed = 1;
   psg->noise_count = 0;
@@ -282,6 +356,9 @@ update_output (PSG * psg)
 
 
   if (psg->env_count >= psg->env_freq)
+
+
+  if (psg->env_count >= psg->env_freq)
   {
     if (!psg->env_pause)
     {
@@ -301,6 +378,7 @@ update_output (PSG * psg)
         if (psg->env_alternate^psg->env_hold) psg->env_face ^= 1; // Swap face on triangle envelopes
         if (psg->env_hold) psg->env_pause = 1;
         psg->env_ptr = psg->env_face ? 0 : 0x1f;       
+        psg->env_ptr = psg->env_face ? 0 : 0x1f;       
       }
       else
       {
@@ -316,10 +394,15 @@ update_output (PSG * psg)
       psg->env_count -= psg->env_freq;
     else
       psg->env_count = 0;
+    if (psg->env_freq >= incr) 
+      psg->env_count -= psg->env_freq;
+    else
+      psg->env_count = 0;
   }
 
   /* Noise */
   psg->noise_count += incr;
+  if (psg->noise_count >= psg->noise_freq)
   if (psg->noise_count >= psg->noise_freq)
   {
     psg->noise_scaler ^= 1;
@@ -339,12 +422,18 @@ update_output (PSG * psg)
       psg->noise_count = 0;
   }
   noise = ~psg->noise_seed & 1;
+  noise = ~psg->noise_seed & 1;
 
   /* Tone */
   for (i = 0; i < 3; i++)
   {
     toneTrig = 0;
     psg->count[i] += incr;
+    if (psg->count[i] >= psg->freq[i])
+    {
+      psg->edge[i] = !psg->edge[i];
+
+      if (psg->freq[i] >= incr) 
     if (psg->count[i] >= psg->freq[i])
     {
       psg->edge[i] = !psg->edge[i];
@@ -376,7 +465,9 @@ update_output (PSG * psg)
     {
       if (!(psg->volume[i] & 32)) 
         psg->ch_out[i] = (psg->voltbl[psg->volume[i] & 31] << 4);
+        psg->ch_out[i] = (psg->voltbl[psg->volume[i] & 31] << 4);
       else 
+        psg->ch_out[i] = (psg->voltbl[psg->env_ptr] << 4);
         psg->ch_out[i] = (psg->voltbl[psg->env_ptr] << 4);
     }
     else 
@@ -455,7 +546,7 @@ update_output (PSG * psg)
 }
 
 static inline int16_t 
-mix_output(PSG *psg) 
+mix_output(PSG *psg)
 {
   return (int16_t)(psg->ch_out[0] + psg->ch_out[1] + psg->ch_out[2]);
 }
@@ -467,7 +558,10 @@ PSG_calc (PSG * psg)
 
   if (!psg->quality)
   {
+  if (!psg->quality)
+  {
     update_output(psg);
+    psg->out = mix_output(psg);
     psg->out = mix_output(psg);
   }
 
@@ -483,8 +577,20 @@ PSG_calc (PSG * psg)
       psg->out >>= 1;
     }
     psg->psgtime -= psg->realstep;
+  else
+  {
+    /* Simple rate converter (See README for detail). */
+    while (psg->realstep > psg->psgtime)
+    {
+      psg->psgtime += psg->psgstep;
+      update_output(psg);
+      psg->out += mix_output(psg);
+      psg->out >>= 1;
+    }
+    psg->psgtime -= psg->realstep;
   }
 
+  return psg->out;
   return psg->out;
 }
 
@@ -497,6 +603,7 @@ PSG_writeReg (PSG * psg, uint32_t reg, uint32_t val)
 
   val &= regmsk[reg];
 
+  psg->reg[reg] = (uint8_t) val;
   psg->reg[reg] = (uint8_t) val;
   switch (reg)
   {
@@ -511,6 +618,7 @@ PSG_writeReg (PSG * psg, uint32_t reg, uint32_t val)
     break;
 
   case 6:
+    psg->noise_freq = val & 31;
     psg->noise_freq = val & 31;
     break;
 
@@ -544,7 +652,7 @@ PSG_writeReg (PSG * psg, uint32_t reg, uint32_t val)
     psg->env_count = 0;
     psg->env_ptr = psg->env_face ? 0 : 0x1f;
     psg->env_whole_period = (psg->env_freq * ((psg->env_alternate&(!psg->env_hold)&psg->env_continue)+1)) << 8; 
-    psg->env_changed = 0;   // Trigger envelopes on their resets as well
+    psg->env_changed = 1;   // Trigger envelopes on their resets as well
     break;
 
   case 14:
