@@ -35,6 +35,7 @@
                         (now YM envelopes sound like intended)
                     --  Envelopes now *fully* reset on write to 0xD
                                 
+  2024-03-01/2 :    -- Complex af triggering (works p damn reliably)
 
   References:
     psg.vhd        -- 2000 written by Kazuhiro Tsujikawa.
