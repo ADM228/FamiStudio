@@ -191,7 +191,7 @@ long Nes_EPSM::run_until(cpu_time_t end_time)
 		{
 			if (psg->trigger_mask & (1 << i))
 				update_trigger(output_buffer_left, psg_time >> epsm_time_precision, triggers[i]);
-			else if (psg->freq[i] <= 1 || !(psg->trigger_mask & (1 << i)))
+			else if (psg->freq[i] <= 1)
 				triggers[i] = trigger_none;
 		}
 

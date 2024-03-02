@@ -64,8 +64,10 @@ extern "C"
 
     /* FamiStudio : triggering related */
     uint8_t trigger_mask;   // Tells us which channels have had an edge this step.
-    uint32_t trigger_width; // Width of the triggering window
-    uint8_t env_changed;    // Specifically for low freq envelope + tone/noise 
+    uint32_t audible_width; // The boundary of audible notes
+    uint32_t trigger_width; // Width of 1 frame
+    uint8_t env_changed;
+    uint8_t env_change_acknowledge;
     uint32_t time_since_last_trigger[3]; // For making a trigger in long absence of one
 
     /* output of channels */
